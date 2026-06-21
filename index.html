@@ -384,7 +384,8 @@
   /* ===== Cloud sync via Firebase (private, sync-code based) ===== */
   const FB_CONFIG={ apiKey:"AIzaSyDrZn6F67g-3-50ttqZ2G-NoWZ6BhJQHR0", authDomain:"eng-vocab-952ec.firebaseapp.com", projectId:"eng-vocab-952ec", storageBucket:"eng-vocab-952ec.firebasestorage.app", messagingSenderId:"100693020053", appId:"1:100693020053:web:9dd615f66dd3b497e17a9c" };
   const K_SYNC="vocab3:synccode";
-  let fbDb=null, fbAuthed=false, syncCode="", syncUnsub=null, lastCloudT=0, applyingRemote=false, pushTimer=null, retryTimer=null, syncStatus="off";
+  let fbDb=null, fbAuthed=false, syncCode="", syncUnsub=null, lastCloudT=0, applyingRemote=false, pushTimer=null, retryTimer=null, pendingShell=false, syncStatus="off";
+  function syncRender(){ if(document.getElementById("sheet-back")||document.getElementById("modal-back")){ pendingShell=true; refreshSyncUI(); } else { shell(); } }
   function fbInit(){
     if(fbDb||!window.firebase||!firebase.initializeApp) return;
     try{
@@ -423,7 +424,7 @@
       await saveProg(); await saveUser(); await saveUSent(); await saveSent(); await saveHide(); await saveSet(); await saveHist();
       allItems().forEach(w=>st(w.id));
     }finally{ applyingRemote=false; }
-    shell();
+    syncRender();
     const mergedCount=userWords.length+userSentences.length;
     if(mergedCount>remoteCount) pushCloud();
   }
@@ -549,7 +550,7 @@
   }
 
   /* ===== add a word tapped inside a sentence ===== */
-  function closeModal(){ const m=document.getElementById("modal-back"); if(m) m.remove(); }
+  function closeModal(){ const m=document.getElementById("modal-back"); if(m) m.remove(); if(pendingShell){ pendingShell=false; shell(); } }
   function openAddPopup(word){
     word=String(word||"").trim(); if(!word) return;
     closeModal();
@@ -1192,7 +1193,7 @@
   }
 
   /* ===== sheets (settings / progress / level) ===== */
-  function closeSheet(){ const s=document.getElementById("sheet-back"); if(s) s.remove(); }
+  function closeSheet(){ const s=document.getElementById("sheet-back"); if(s) s.remove(); if(pendingShell){ pendingShell=false; shell(); } }
   function openSheet(title, inner){
     closeSheet();
     const wrap=document.createElement("div");
