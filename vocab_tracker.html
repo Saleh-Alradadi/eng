@@ -352,15 +352,15 @@
   /* ===== Cloud sync via Firebase (private, sync-code based) ===== */
   const FB_CONFIG={ apiKey:"AIzaSyDrZn6F67g-3-50ttqZ2G-NoWZ6BhJQHR0", authDomain:"eng-vocab-952ec.firebaseapp.com", projectId:"eng-vocab-952ec", storageBucket:"eng-vocab-952ec.firebasestorage.app", messagingSenderId:"100693020053", appId:"1:100693020053:web:9dd615f66dd3b497e17a9c" };
   const K_SYNC="vocab3:synccode";
-  let fbDb=null, fbAuthed=false, syncCode="", syncUnsub=null, lastCloudT=0, applyingRemote=false, pushTimer=null, syncStatus="off";
+  let fbDb=null, fbAuthed=false, syncCode="", syncUnsub=null, lastCloudT=0, applyingRemote=false, pushTimer=null, retryTimer=null, syncStatus="off";
   function fbInit(){
     if(fbDb||!window.firebase||!firebase.initializeApp) return;
     try{
       firebase.initializeApp(FB_CONFIG);
       fbDb=firebase.firestore();
-      try{ fbDb.settings({ experimentalAutoDetectLongPolling:true, merge:true }); }catch(e){}
+      try{ fbDb.settings({ experimentalForceLongPolling:true }); }catch(e){}
       firebase.auth().onAuthStateChanged(u=>{ fbAuthed=!!u; if(fbAuthed&&syncCode) startCloud(); refreshSyncUI(); });
-      firebase.auth().signInAnonymously().catch(()=>{ syncStatus="error"; refreshSyncUI(); });
+      firebase.auth().signInAnonymously().catch(()=>{ syncStatus="error"; refreshSyncUI(); clearTimeout(retryTimer); retryTimer=setTimeout(()=>{ if(syncCode) firebase.auth().signInAnonymously().catch(()=>{}); }, 5000); });
     }catch(e){ syncStatus="error"; refreshSyncUI(); }
   }
   function stateBlob(){ return { v:VERSION, t:Date.now(), progress:progress, userWords:userWords, userSentences:userSentences, sentences:sentences, hidden:hidden, settings:settings, history:history }; }
@@ -406,7 +406,7 @@
       if(!d){ pushCloud(); refreshSyncUI(); return; }
       if((d.t||0)>lastCloudT){ lastCloudT=d.t||0; applyBlob(d); }
       refreshSyncUI();
-    }, ()=>{ syncStatus="error"; refreshSyncUI(); });
+    }, ()=>{ syncStatus="error"; refreshSyncUI(); clearTimeout(retryTimer); retryTimer=setTimeout(()=>{ if(syncCode&&fbAuthed) startCloud(); }, 5000); });
   }
   async function pushCloud(){
     if(!fbDb||!syncCode||applyingRemote) return;
@@ -744,9 +744,9 @@
         <div class="status-msg" id="imp-status"></div></div>`;
       $("#imp-go").onclick=doImport;
     } else {
-      const dump=JSON.stringify({v:VERSION,userWords:userWords,progress:progress},null,1);
-      p.innerHTML=`<div class="panel"><h4>تصدير نسخة احتياطية</h4>
-        <p class="small">انسخ هذا النص واحفظه. تقدر تلصقه مستقبلاً في «استيراد كود» (يقبل هذا الشكل أيضاً) لاسترجاع بياناتك على أي جهاز.</p>
+      const dump=JSON.stringify(stateBlob(),null,1);
+      p.innerHTML=`<div class="panel"><h4>تصدير نسخة احتياطية كاملة</h4>
+        <p class="small">انسخ هذا النص كامل واحفظه (يشمل كل الكلمات والجمل والتقدّم). تقدر تلصقه في «استيراد كود» على أي جهاز لاسترجاع بياناتك.</p>
         <textarea class="box" id="exp-box" style="min-height:120px">${esc(dump)}</textarea>
         <div class="row-btns"><button class="pill-btn" id="exp-copy">نسخ</button></div>
         <div class="status-msg" id="exp-status"></div></div>`;
@@ -936,7 +936,12 @@
       const entry={ id:o.id&&!wmap()[o.id]?o.id:slug(o.en), en:o.en, pron:o.pron||"", ar:o.ar||"", uses:o.uses||"", deriv:Array.isArray(o.deriv)?o.deriv:[], src:o.src||"import" };
       userWords.push(entry); st(entry.id); n++;
     });
-    await saveUser(); await saveProg();
+    if(data && Array.isArray(data.userSentences)){
+      data.userSentences.forEach(s=>{ if(s&&s.id&&!userSentences.some(x=>x.id===s.id)){ userSentences.push(s); st(s.id); } });
+    }
+    if(data && data.sentences && typeof data.sentences==="object") sentences=Object.assign({}, data.sentences, sentences);
+    if(data && data.hidden && typeof data.hidden==="object") hidden=Object.assign({}, data.hidden, hidden);
+    await saveUser(); await saveProg(); await saveUSent(); await saveSent(); await saveHide();
     status.textContent=`تم استيراد ${n} كلمة${dup?` · تم تجاهل ${dup} (موجودة مسبقاً)`:""}.`;
     setTimeout(()=>{ togglePanel("imp"); renderStudy(); refreshShell(); switchTab("study"); },1100);
   }
