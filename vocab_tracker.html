@@ -77,6 +77,9 @@
   .mark-s{ background:var(--blue-soft); color:var(--blue); font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px; }
   .tip{ display:none; position:absolute; top:132%; inset-inline-end:0; width:280px; max-width:80vw; background:var(--ink); color:#fff; padding:11px 13px; border-radius:10px; font-size:12.5px; font-weight:500; line-height:1.75; z-index:60; box-shadow:0 10px 28px rgba(0,0,0,.28); text-align:right; max-height:320px; overflow:auto; cursor:default; }
   .mark:hover .tip,.mark:focus .tip,.mark.open .tip{ display:block; }
+  @media (max-width:700px){
+    .mark .tip{ position:fixed; top:auto; left:8px; right:8px; inset-inline-start:auto; inset-inline-end:auto; bottom:calc(12px + env(safe-area-inset-bottom)); width:auto; max-width:none; max-height:60vh; box-shadow:0 -8px 30px rgba(0,0,0,.4); }
+  }
   .tip b{ color:#f2c46b; font-weight:700; }
   .drow{ border-bottom:1px solid rgba(255,255,255,.12); padding:7px 0; } .drow:last-child{ border-bottom:none; }
   .dform{ direction:ltr; font-weight:800; color:#fff; font-size:14px; } .dpos{ font-size:10.5px; color:#c9b48c; margin-inline-start:7px; }
