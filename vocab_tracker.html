@@ -264,13 +264,13 @@
     if(changed) await saveUser();
     allItems().forEach(w=>st(w.id));
   }
-  async function saveProg(){ await Store.set(K_PROG,{v:VERSION,data:progress}); }
-  async function saveUser(){ await Store.set(K_USER,userWords); }
-  async function saveUSent(){ await Store.set(K_USENT,userSentences); }
-  async function saveSent(){ await Store.set(K_SENT,sentences); }
-  async function saveHide(){ await Store.set(K_HIDE,hidden); }
-  async function saveSet(){ await Store.set(K_SET,settings); }
-  async function saveHist(){ await Store.set(K_HIST,history); }
+  async function saveProg(){ await Store.set(K_PROG,{v:VERSION,data:progress}); cloudPush(); }
+  async function saveUser(){ await Store.set(K_USER,userWords); cloudPush(); }
+  async function saveUSent(){ await Store.set(K_USENT,userSentences); cloudPush(); }
+  async function saveSent(){ await Store.set(K_SENT,sentences); cloudPush(); }
+  async function saveHide(){ await Store.set(K_HIDE,hidden); cloudPush(); }
+  async function saveSet(){ await Store.set(K_SET,settings); cloudPush(); }
+  async function saveHist(){ await Store.set(K_HIST,history); cloudPush(); }
   function logActivity(kind,n){ const t=today(); const h=history[t]||(history[t]={r:0,l:0,qc:0,qt:0}); h[kind]=(h[kind]||0)+(n||1); saveHist(); }
 
   function counts(){
@@ -349,9 +349,81 @@
     try{ await deferredPrompt.userChoice; }catch(e){}
     deferredPrompt=null; refreshInstallBar(); refreshSettingsInstall();
   }
+  /* ===== Cloud sync via Firebase (private, sync-code based) ===== */
+  const FB_CONFIG={ apiKey:"AIzaSyDrZn6F67g-3-50ttqZ2G-NoWZ6BhJQHR0", authDomain:"eng-vocab-952ec.firebaseapp.com", projectId:"eng-vocab-952ec", storageBucket:"eng-vocab-952ec.firebasestorage.app", messagingSenderId:"100693020053", appId:"1:100693020053:web:9dd615f66dd3b497e17a9c" };
+  const K_SYNC="vocab3:synccode";
+  let fbDb=null, fbAuthed=false, syncCode="", syncUnsub=null, lastCloudT=0, applyingRemote=false, pushTimer=null, syncStatus="off";
+  function fbInit(){
+    if(fbDb||!window.firebase||!firebase.initializeApp) return;
+    try{
+      firebase.initializeApp(FB_CONFIG);
+      fbDb=firebase.firestore();
+      firebase.auth().onAuthStateChanged(u=>{ fbAuthed=!!u; if(fbAuthed&&syncCode) startCloud(); refreshSyncUI(); });
+      firebase.auth().signInAnonymously().catch(()=>{ syncStatus="error"; refreshSyncUI(); });
+    }catch(e){ syncStatus="error"; refreshSyncUI(); }
+  }
+  function stateBlob(){ return { v:VERSION, t:Date.now(), progress:progress, userWords:userWords, userSentences:userSentences, sentences:sentences, hidden:hidden, settings:settings, history:history }; }
+  async function applyBlob(d){
+    if(!d) return; applyingRemote=true;
+    try{
+      if(d.progress&&typeof d.progress==="object") progress=d.progress;
+      if(Array.isArray(d.userWords)) userWords=d.userWords;
+      if(Array.isArray(d.userSentences)) userSentences=d.userSentences;
+      if(d.sentences&&typeof d.sentences==="object") sentences=d.sentences;
+      if(d.hidden&&typeof d.hidden==="object") hidden=d.hidden;
+      if(d.settings&&typeof d.settings==="object") settings=Object.assign(settings,d.settings);
+      if(d.history&&typeof d.history==="object") history=d.history;
+      await saveProg(); await saveUser(); await saveUSent(); await saveSent(); await saveHide(); await saveSet(); await saveHist();
+      allItems().forEach(w=>st(w.id));
+    }finally{ applyingRemote=false; }
+    shell();
+  }
+  function startCloud(){
+    if(!fbDb||!syncCode) return;
+    if(syncUnsub){ syncUnsub(); syncUnsub=null; }
+    syncStatus="connecting"; refreshSyncUI();
+    const ref=fbDb.collection("vocab").doc(syncCode);
+    syncUnsub=ref.onSnapshot(snap=>{
+      syncStatus="on";
+      const d=(snap&&snap.exists)?snap.data():null;
+      if(!d){ pushCloud(); refreshSyncUI(); return; }
+      if((d.t||0)>lastCloudT){ lastCloudT=d.t||0; applyBlob(d); }
+      refreshSyncUI();
+    }, ()=>{ syncStatus="error"; refreshSyncUI(); });
+  }
+  async function pushCloud(){
+    if(!fbDb||!syncCode||applyingRemote) return;
+    const b=stateBlob(); lastCloudT=b.t;
+    try{ await fbDb.collection("vocab").doc(syncCode).set(b); syncStatus="on"; }catch(e){ syncStatus="error"; }
+    refreshSyncUI();
+  }
+  function cloudPush(){ if(!syncCode||!fbAuthed||applyingRemote) return; clearTimeout(pushTimer); pushTimer=setTimeout(pushCloud, 900); }
+  function setSyncCode(code){
+    code=(code||"").trim().replace(/["'\s]/g,"");
+    syncCode=code;
+    try{ if(code) localStorage.setItem(K_SYNC,code); else localStorage.removeItem(K_SYNC); }catch(e){}
+    lastCloudT=0;
+    if(code){ fbInit(); if(fbAuthed) startCloud(); }
+    else { if(syncUnsub){ syncUnsub(); syncUnsub=null; } syncStatus="off"; }
+    refreshSyncUI();
+  }
+  function refreshSyncUI(){
+    const el=document.getElementById("set-sync"); if(!el) return;
+    const status = !syncCode ? "غير مفعّلة" : syncStatus==="on" ? "متصل ✓ — يتزامن تلقائياً" : syncStatus==="connecting" ? "جارٍ الاتصال…" : syncStatus==="error" ? "تعذّر الاتصال — تأكد من الإنترنت" : "غير مفعّلة";
+    el.innerHTML=`
+      <p class="small">اكتب رمزاً سرياً (نفسه على كل أجهزتك) فتتزامن كلماتك وجملك تلقائياً عبر السحابة. اللي ما يعرف الرمز ما يشوف بياناتك.</p>
+      <input class="search" id="sync-code-in" placeholder="رمز سري مثل: saleh-2026-9921" value="${esc(syncCode)}" style="margin-bottom:8px">
+      <div class="row-btns"><button class="pill-btn" id="sync-link">${syncCode?"تحديث الرمز":"تفعيل المزامنة"}</button>${syncCode?'<button class="pill-btn alt" id="sync-off">إيقاف</button>':''}</div>
+      <p class="setmsg">الحالة: ${status}</p>
+      ${syncCode?'<div class="row-btns"><button class="pill-btn alt" id="sync-up">⬆ ارفع للسحابة</button><button class="pill-btn alt" id="sync-down">⬇ اسحب من السحابة</button></div>':''}`;
+    const lk=document.getElementById("sync-link"); if(lk) lk.onclick=()=>setSyncCode(document.getElementById("sync-code-in").value);
+    const off=document.getElementById("sync-off"); if(off) off.onclick=()=>setSyncCode("");
+    const up=document.getElementById("sync-up"); if(up) up.onclick=()=>{ lastCloudT=Date.now(); pushCloud(); };
+    const dn=document.getElementById("sync-down"); if(dn) dn.onclick=()=>{ if(fbDb&&syncCode) fbDb.collection("vocab").doc(syncCode).get().then(s=>{ if(s&&s.exists){ const d=s.data(); lastCloudT=(d.t||Date.now()); applyBlob(d); } }); };
+  }
+
   function refreshSettingsInstall(){
     const el=document.getElementById("set-install"); if(!el) return;
-    if(isStandalone()){ el.innerHTML='<p class="setmsg">التطبيق مثبّت ويعمل كتطبيق مستقل ✓</p>'; return; }
     let html="";
     if(deferredPrompt) html+='<button class="pill-btn" id="si-go" style="width:100%;margin-bottom:8px">📲 تثبيت التطبيق الآن</button>';
     html+=`<a class="pill-btn alt" href="${APK_URL}" download style="display:block;width:100%;box-sizing:border-box;text-align:center;text-decoration:none">⬇ تحميل تطبيق أندرويد (APK)</a>`;
@@ -1151,6 +1223,8 @@
     openSheet("الإعدادات والإشعارات",`
       <div class="setlbl">التطبيق</div>
       <div id="set-install"></div>
+      <div class="setlbl">المزامنة بين الأجهزة</div>
+      <div id="set-sync"></div>
       <div class="setrow"><b>الإشعارات</b><label class="switch"><input type="checkbox" id="s-notif" ${settings.notif&&perm==="granted"?"checked":""}><span class="slider"></span></label></div>
       <div class="setmsg" id="s-permmsg">${perm==="denied"?"الإشعارات محظورة — فعّلها من إعدادات الموقع في المتصفّح.":perm==="unsupported"?"المتصفّح لا يدعم الإشعارات.":""}</div>
       <div class="setrow"><span>وقت التذكير اليومي</span><input type="time" id="s-time" value="${settings.time}" class="tinput"></div>
@@ -1168,6 +1242,7 @@
       <div class="setmsg" id="s-bgmsg">يعمل على Chrome أندرويد بعد تثبيت التطبيق (حسب دعم الجهاز).</div>
       <div class="row-btns"><button class="pill-btn" id="s-save">حفظ</button><button class="pill-btn alt" id="s-test">إشعار تجريبي 🔔</button></div>`);
     refreshSettingsInstall();
+    refreshSyncUI();
     document.getElementById("s-notif").onchange=async(e)=>{
       const msg=document.getElementById("s-permmsg");
       if(e.target.checked){
@@ -1273,6 +1348,6 @@
     document.addEventListener("visibilitychange",()=>{ if(!document.hidden){ onOpenCheck(); notifTick(); } });
     if(settings.bgsync){ enableBgSync(); }
   }
-  load().then(()=>{ shell(); initNotifications(); });
+  load().then(()=>{ shell(); initNotifications(); try{ syncCode=localStorage.getItem(K_SYNC)||""; }catch(e){ syncCode=""; } if(syncCode) fbInit(); });
 })();
 </script>
