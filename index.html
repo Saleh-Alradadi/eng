@@ -447,7 +447,7 @@
   }
   function cloudPush(){ if(!syncCode||!fbAuthed||applyingRemote) return; clearTimeout(pushTimer); pushTimer=setTimeout(pushCloud, 900); }
   function setSyncCode(code){
-    code=(code||"").trim().replace(/["'\s]/g,"");
+    code=(code||"").trim().replace(/["'\s]/g,"").toLowerCase();
     syncCode=code;
     try{ if(code) localStorage.setItem(K_SYNC,code); else localStorage.removeItem(K_SYNC); }catch(e){}
     lastCloudT=0;
@@ -460,7 +460,7 @@
     const status = !syncCode ? "غير مفعّلة" : syncStatus==="on" ? "متصل ✓ — يتزامن تلقائياً" : syncStatus==="connecting" ? "جارٍ الاتصال…" : syncStatus==="error" ? "تعذّر الاتصال — تأكد من الإنترنت" : "غير مفعّلة";
     el.innerHTML=`
       <p class="small">اكتب رمزاً سرياً (نفسه على كل أجهزتك) فتتزامن كلماتك وجملك تلقائياً عبر السحابة. اللي ما يعرف الرمز ما يشوف بياناتك.</p>
-      <input class="search" id="sync-code-in" placeholder="رمز سري مثل: saleh-2026-9921" value="${esc(syncCode)}" style="margin-bottom:8px">
+      <input class="search" id="sync-code-in" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="رمز سري (حروف صغيرة) مثل: saleh-2026-9921" value="${esc(syncCode)}" style="margin-bottom:8px">
       <div class="row-btns"><button class="pill-btn" id="sync-link">${syncCode?"تحديث الرمز":"تفعيل المزامنة"}</button>${syncCode?'<button class="pill-btn alt" id="sync-off">إيقاف</button>':''}</div>
       <p class="setmsg">الحالة: ${status}</p>
       ${syncCode?'<div class="row-btns"><button class="pill-btn alt" id="sync-up">⬆ ارفع للسحابة</button><button class="pill-btn alt" id="sync-down">⬇ اسحب من السحابة</button></div>':''}`;
