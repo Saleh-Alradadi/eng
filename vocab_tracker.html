@@ -324,18 +324,22 @@
   function refreshShell(){ shell(); }
 
   /* ===== PWA install (in-app banner + settings button) ===== */
+  const APK_URL="app.apk";   // ارفع ملف APK باسم app.apk في جذر المستودع ليعمل زر التحميل
   let deferredPrompt=null, installDismissed=false;
   function isStandalone(){ try{ return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone===true; }catch(e){ return false; } }
   window.addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); deferredPrompt=e; refreshInstallBar(); refreshSettingsInstall(); });
   window.addEventListener("appinstalled", ()=>{ deferredPrompt=null; refreshInstallBar(); refreshSettingsInstall(); });
   function refreshInstallBar(){
     const bar=document.getElementById("install-bar"); if(!bar) return;
-    if(deferredPrompt && !installDismissed && !isStandalone()){
-      bar.style.display="";
-      bar.innerHTML=`<div class="install-card"><span class="ic-txt">📲 ثبّت التطبيق على جهازك للوصول السريع وبدون شريط المتصفّح</span><button class="pill-btn" id="ib-go">تثبيت</button><button class="ib-x" id="ib-x" title="إخفاء">✕</button></div>`;
+    if(isStandalone()||installDismissed){ bar.innerHTML=""; bar.style.display="none"; return; }
+    bar.style.display="";
+    if(deferredPrompt){
+      bar.innerHTML=`<div class="install-card"><span class="ic-txt">📲 ثبّت التطبيق على جهازك</span><button class="pill-btn" id="ib-go">تثبيت</button><button class="ib-x" id="ib-x" title="إخفاء">✕</button></div>`;
       document.getElementById("ib-go").onclick=doInstall;
-      document.getElementById("ib-x").onclick=()=>{ installDismissed=true; refreshInstallBar(); };
-    } else { bar.innerHTML=""; bar.style.display="none"; }
+    } else {
+      bar.innerHTML=`<div class="install-card"><span class="ic-txt">📲 حمّل التطبيق لجهازك (Android)</span><a class="pill-btn" href="${APK_URL}" download>⬇ تحميل</a><button class="ib-x" id="ib-x" title="إخفاء">✕</button></div>`;
+    }
+    const x=document.getElementById("ib-x"); if(x) x.onclick=()=>{ installDismissed=true; refreshInstallBar(); };
   }
   async function doInstall(){
     if(!deferredPrompt) return;
@@ -346,8 +350,12 @@
   function refreshSettingsInstall(){
     const el=document.getElementById("set-install"); if(!el) return;
     if(isStandalone()){ el.innerHTML='<p class="setmsg">التطبيق مثبّت ويعمل كتطبيق مستقل ✓</p>'; return; }
-    if(deferredPrompt){ el.innerHTML='<button class="pill-btn" id="si-go" style="width:100%">📲 تثبيت التطبيق الآن</button>'; document.getElementById("si-go").onclick=doInstall; }
-    else { el.innerHTML='<p class="setmsg">لتثبيت التطبيق: من قائمة المتصفّح ⋮ اختر «تثبيت التطبيق» أو «الإضافة إلى الشاشة الرئيسية». على آيفون (Safari): زر المشاركة ← «أضِف إلى الشاشة الرئيسية». إذا ما ظهر الخيار، حدّث الصفحة وانتظر ثوانٍ.</p>'; }
+    let html="";
+    if(deferredPrompt) html+='<button class="pill-btn" id="si-go" style="width:100%;margin-bottom:8px">📲 تثبيت التطبيق الآن</button>';
+    html+=`<a class="pill-btn alt" href="${APK_URL}" download style="display:block;width:100%;box-sizing:border-box;text-align:center;text-decoration:none">⬇ تحميل تطبيق أندرويد (APK)</a>`;
+    html+='<p class="setmsg">بعد التحميل: افتح الملف واضغط «تثبيت» (لو طُلب، فعّل «السماح بتثبيت تطبيقات من هذا المصدر»). إذا لم يبدأ التحميل فملف الـAPK لم يُرفع بعد.</p>';
+    el.innerHTML=html;
+    const g=document.getElementById("si-go"); if(g) g.onclick=doInstall;
   }
 
   function switchTab(t){
