@@ -1,5 +1,5 @@
 /* Service worker: app shell offline + installability */
-const CACHE = "kalimati-v2";
+const CACHE = "kalimati-v3";
 const ASSETS = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {
