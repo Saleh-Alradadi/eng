@@ -365,18 +365,34 @@
   function stateBlob(){ return { v:VERSION, t:Date.now(), progress:progress, userWords:userWords, userSentences:userSentences, sentences:sentences, hidden:hidden, settings:settings, history:history }; }
   async function applyBlob(d){
     if(!d) return; applyingRemote=true;
+    const remoteCount=(Array.isArray(d.userWords)?d.userWords.length:0)+(Array.isArray(d.userSentences)?d.userSentences.length:0);
     try{
-      if(d.progress&&typeof d.progress==="object") progress=d.progress;
-      if(Array.isArray(d.userWords)) userWords=d.userWords;
-      if(Array.isArray(d.userSentences)) userSentences=d.userSentences;
-      if(d.sentences&&typeof d.sentences==="object") sentences=d.sentences;
-      if(d.hidden&&typeof d.hidden==="object") hidden=d.hidden;
-      if(d.settings&&typeof d.settings==="object") settings=Object.assign(settings,d.settings);
-      if(d.history&&typeof d.history==="object") history=d.history;
+      // ===== MERGE (union) — never lose any word, regardless of order =====
+      const byId=(arr)=>{ const m={}; (arr||[]).forEach(x=>{ if(x&&x.id!=null) m[x.id]=x; }); return m; };
+      const mergeArr=(loc,rem)=>Object.values(Object.assign({}, byId(rem), byId(loc)));
+      if(Array.isArray(d.userWords)) userWords=mergeArr(userWords,d.userWords);
+      if(Array.isArray(d.userSentences)) userSentences=mergeArr(userSentences,d.userSentences);
+      if(d.sentences&&typeof d.sentences==="object") sentences=Object.assign({}, d.sentences, sentences);
+      if(d.hidden&&typeof d.hidden==="object") hidden=Object.assign({}, d.hidden, hidden);
+      if(d.history&&typeof d.history==="object") history=Object.assign({}, d.history, history);
+      if(d.settings&&typeof d.settings==="object") settings=Object.assign({}, d.settings, settings);
+      if(d.progress&&typeof d.progress==="object"){
+        const rank={study:0,review:1,done:2};
+        const p=Object.assign({}, d.progress);
+        Object.keys(progress||{}).forEach(id=>{
+          const a=progress[id], b=p[id];
+          if(!b){ p[id]=a; return; }
+          const ra=rank[a.status]||0, rb=rank[b.status]||0;
+          if(ra>rb || (ra===rb && (a.box||0)>=(b.box||0))) p[id]=a;
+        });
+        progress=p;
+      }
       await saveProg(); await saveUser(); await saveUSent(); await saveSent(); await saveHide(); await saveSet(); await saveHist();
       allItems().forEach(w=>st(w.id));
     }finally{ applyingRemote=false; }
     shell();
+    const mergedCount=userWords.length+userSentences.length;
+    if(mergedCount>remoteCount) pushCloud();
   }
   function startCloud(){
     if(!fbDb||!syncCode) return;
