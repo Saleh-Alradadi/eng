@@ -391,7 +391,6 @@
     try{
       firebase.initializeApp(FB_CONFIG);
       fbDb=firebase.firestore();
-      try{ fbDb.settings({ experimentalForceLongPolling:true }); }catch(e){}
       firebase.auth().onAuthStateChanged(u=>{ fbAuthed=!!u; if(fbAuthed&&syncCode) startCloud(); refreshSyncUI(); });
       firebase.auth().signInAnonymously().catch(()=>{ syncStatus="error"; refreshSyncUI(); clearTimeout(retryTimer); retryTimer=setTimeout(()=>{ if(syncCode) firebase.auth().signInAnonymously().catch(()=>{}); }, 5000); });
     }catch(e){ syncStatus="error"; refreshSyncUI(); }
