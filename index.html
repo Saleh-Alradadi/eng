@@ -104,7 +104,7 @@
   .dextr{ color:#cdd7e6; font-size:11.5px; margin-top:1px; }
   .scat{ color:#8fb6e0; font-weight:700; font-size:12px; margin:8px 0 4px; border-bottom:1px solid rgba(255,255,255,.12); padding-bottom:3px; }
   .srow{ padding:4px 0; } .sen{ direction:ltr; color:#fff; font-size:13px; } .sar{ color:#cdd7e6; font-size:11.5px; margin-top:1px; }
-  .wtok{ cursor:pointer; border-radius:3px; padding:0 1px; } .wtok:hover{ background:var(--accent); color:#fff; }
+  .wtok{ cursor:pointer; border-radius:3px; padding:1px 2px; border-bottom:1px dotted rgba(242,196,107,.55); } .wtok:hover,.wtok:active{ background:var(--accent); color:#fff; }
   .trtag{ font-size:9.5px; font-weight:700; padding:1px 6px; border-radius:10px; margin-inline-start:5px; }
   .trtag.mt{ background:#5a4a2a; color:#f2c46b; } .trtag.hu{ background:#2c4a3a; color:#9ad5b3; }
   .modal-back{ position:fixed; inset:0; background:rgba(10,18,33,.55); display:flex; align-items:center; justify-content:center; z-index:200; padding:18px; }
@@ -446,13 +446,14 @@
             <span class="mark mark-d" tabindex="0">مشتقات<span class="tip">${derivTipHTML(w)}</span></span>
             <span class="mark mark-s" tabindex="0">جمل<span class="tip">${sentsTipHTML(w)}</span></span>`;
   }
+  let markOpenedAt=0;
   function attachMarks(scope){
     document.querySelectorAll(scope+" .mark").forEach(m=>m.addEventListener("click",e=>{
       e.stopPropagation(); const o=m.classList.contains("open");
-      document.querySelectorAll(".mark.open").forEach(x=>x.classList.remove("open")); if(!o)m.classList.add("open");
+      document.querySelectorAll(".mark.open").forEach(x=>x.classList.remove("open")); if(!o){ m.classList.add("open"); markOpenedAt=Date.now(); }
     }));
     document.querySelectorAll(scope+" .tip").forEach(t=>t.addEventListener("click",e=>e.stopPropagation()));
-    document.querySelectorAll(scope+" .wtok").forEach(t=>t.addEventListener("click",e=>{ e.stopPropagation(); openAddPopup(t.dataset.w); }));
+    document.querySelectorAll(scope+" .wtok").forEach(t=>t.addEventListener("click",e=>{ e.stopPropagation(); if(Date.now()-markOpenedAt<450) return; openAddPopup(t.dataset.w); }));
   }
 
   /* ===== add a word tapped inside a sentence ===== */
