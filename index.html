@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>تعلّم الإنجليزية</title>
-<meta name="description" content="تطبيق تعلّم الإنجليزية: مفردات وجمل، نطق صوتي، مشتقات، مراجعة دورية واختبارات وإشعارات.">
+<meta name="description" content="تطبيق تعلّم الإنجليزية: مفردات وجمل، نطق صوتي، مشتقات، اختبارات وإشعارات.">
 <meta name="theme-color" content="#15233f">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
@@ -333,7 +333,6 @@
       <div class="tabs">
         <button class="tab${activeTab==="study"?" active":""}" data-t="study">كلمات</button>
         <button class="tab${activeTab==="sent"?" active":""}" data-t="sent">جمل</button>
-        <button class="tab${activeTab==="review"?" active":""}" data-t="review">المراجعة</button>
         <button class="tab${activeTab==="quiz"?" active":""}" data-t="quiz">اختبار</button>
         <button class="tab${activeTab==="learned"?" active":""}" data-t="learned">تم تعلّمها</button>
         <button class="tab${activeTab==="done"?" active":""}" data-t="done">المُنجزة</button>
@@ -341,7 +340,6 @@
       <div id="view-study" class="view"></div>
       <div id="view-sent" class="view hidden"></div>
       <div id="view-learned" class="view hidden"></div>
-      <div id="view-review" class="view hidden"></div>
       <div id="view-quiz" class="view hidden"></div>
       <div id="view-done" class="view hidden"></div>
       <div class="foot">
@@ -500,11 +498,10 @@
   function switchTab(t){
     activeTab=t;
     document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.t===t));
-    ["study","sent","learned","review","quiz","done"].forEach(v=>$("#view-"+v).classList.toggle("hidden",v!==t));
+    ["study","sent","learned","quiz","done"].forEach(v=>$("#view-"+v).classList.toggle("hidden",v!==t));
     if(t==="study") renderStudy();
     if(t==="sent") renderSentences();
     if(t==="learned") renderLearned();
-    if(t==="review") startReview();
     if(t==="quiz") startQuiz();
     if(t==="done") renderDone();
   }
@@ -727,7 +724,7 @@
     const body=(words.length||sents.length)?secHTML("كلمات",words,studyCardHTML)+secHTML("جمل",sents,sentCardHTML):'<p class="hint-row" style="text-align:center">ما فيه عناصر هنا بعد — تعلّم كلمات أو جملاً.</p>';
     $("#view-learned").innerHTML=`
       <input class="search" id="search-l" placeholder="ابحث…" />
-      <div class="hint-row">ما تعلّمته من كلمات وجمل (مفصولة بقسمين)، وهي ضمن المراجعة والاختبار. «أنجزتها» للأرشفة، «رجوع» لإعادة الدراسة.</div>
+      <div class="hint-row">ما تعلّمته من كلمات وجمل (مفصولة بقسمين)، وهي تدخل في الاختبار. «أنجزتها» للأرشفة، «رجوع» لإعادة الدراسة.</div>
       ${body}`;
     const inp=$("#search-l"); inp.value=filter||""; inp.oninput=()=>renderLearned(inp.value);
     wireWordActions("#view-learned");
@@ -745,7 +742,7 @@
         <button class="tool-btn" id="ts-collect" style="flex:1">⟲ تجميع الجمل من جمل الكلمات</button>
       </div>
       <input class="search" id="search-s" placeholder="ابحث في الجمل…" />
-      <div class="hint-row">ادرس جملاً كاملة بنفس فكرة الكلمات: اضغط «تعلّمتها» فتدخل المراجعة والاختبار. اضغط «تجميع الجمل» لسحب جمل الكلمات وأمثلتها (مع ترجمتها) إلى هنا.</div>
+      <div class="hint-row">ادرس جملاً كاملة بنفس فكرة الكلمات: اضغط «تعلّمتها» فتدخل الاختبار. اضغط «تجميع الجمل» لسحب جمل الكلمات وأمثلتها (مع ترجمتها) إلى هنا.</div>
       ${cards||'<p class="hint-row" style="text-align:center">ما فيه جمل بعد — اضغط «تجميع الجمل من جمل الكلمات». (للتجميع من الإنترنت افتح علامة «جمل» على الكلمات أول واضغط «جمل من الإنترنت ⟳».)</p>'}`;
     const inp=$("#search-s"); inp.value=filter||""; inp.oninput=()=>renderSentences(inp.value);
     $("#ts-collect").onclick=collectSentences;
@@ -1058,14 +1055,7 @@
       return (sa.nextDue||"")<(sb.nextDue||"")?-1:1; });
     return cand.slice(0, n||4);
   }
-  function startReviewBatch(ids){
-    const m=wmap(); const q=ids.map(id=>m[id]).filter(Boolean);
-    if(!q.length){ switchTab("review"); return; }
-    activeTab="review";
-    document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.t==="review"));
-    ["study","learned","review","quiz","done"].forEach(v=>$("#view-"+v).classList.toggle("hidden",v!=="review"));
-    queue=q; qIndex=0; revMCQ=null; revAnswered=false; reviewPools=quizPools(); sessionDone=0; renderReview();
-  }
+  function startReviewBatch(ids){ switchTab("quiz"); }
 
   function scheduleHTML(){
     const upcoming=allWords().map(w=>({w,s:st(w.id)})).filter(o=>(o.s.status==="review"||o.s.status==="done")&&o.s.nextDue)
@@ -1191,8 +1181,8 @@
   }
   function startQuiz(){
     const pool=buildPools();
-    if(pool.length<4){ $("#view-quiz").innerHTML=`<div class="empty"><div class="big">📝</div><h3>الاختبار يحتاج عناصر متعلَّمة</h3><p>اضغط «تعلّمتها ✓» على بعض الكلمات أو الجمل، فتدخل هنا.</p></div>`; return; }
-    pool.sort(()=>Math.random()-0.5); quizItems=pool.slice(0,10); quizIdx=0; quizScore=0; quizWrong=[]; renderQuiz();
+    if(pool.length<1){ $("#view-quiz").innerHTML=`<div class="empty"><div class="big">📝</div><h3>الاختبار يحتاج عناصر متعلَّمة</h3><p>اضغط «تعلّمتها ✓» على بعض الكلمات أو الجمل (في تبويب «كلمات» أو «جمل»)، فتدخل هنا.</p></div>`; return; }
+    pool.sort(()=>Math.random()-0.5); quizItems=pool.slice(0,12); quizIdx=0; quizScore=0; quizWrong=[]; renderQuiz();
   }
   function renderQuiz(){
     const view=$("#view-quiz");
@@ -1209,9 +1199,18 @@
     const b=$("#opts");
     item.options.forEach(o=>{ const btn=document.createElement("button"); btn.className="opt"; if(item.optDir==="ltr") btn.style.direction="ltr"; btn.textContent=o; btn.onclick=()=>ansQuiz(btn,o===item.answer,item.answer,item.wid); b.appendChild(btn); });
   }
+  async function gradeItem(id, known){
+    const s=st(id); if(!s) return;
+    if(s.status!=="review"&&s.status!=="done") return;
+    s.seen++;
+    if(s.status==="done"){ if(known){ s.correct++; s.nextDue=addDays(DONE_INTERVAL); } else { s.status="review"; s.box=2; s.nextDue=addDays(2); } }
+    else { if(known){ s.box=Math.min(5,s.box+1); s.correct++; s.nextDue=addDays(INTERVALS[s.box]); } else { s.box=1; s.nextDue=addDays(1); } }
+    s.last=today(); logActivity("r",1); await saveProg();
+  }
   function ansQuiz(btn,correct,answer,wid){
     document.querySelectorAll(".opt").forEach(b=>{ b.disabled=true; if(b.textContent===answer) b.classList.add("correct"); });
     if(correct) quizScore++; else { btn.classList.add("wrong"); if(wid&&quizWrong.indexOf(wid)<0) quizWrong.push(wid); }
+    if(wid) gradeItem(wid, correct);
     setTimeout(()=>{ quizIdx++; renderQuiz(); },950);
   }
   function renderQuizResult(){
@@ -1303,14 +1302,14 @@
         if(batch.length){ settings.lastInterval=Date.now(); saveSet();
           const m=wmap(); const names=batch.map(id=>(m[id]||{}).en).filter(Boolean).join("، ");
           notify("مراجعة سريعة 🔁","راجع كلمات سابقة: "+names,"batch");
-          showBanner("🔁 مراجعة سريعة: "+names,()=>startReviewBatch(batch));
+          showBanner("🔁 مراجعة سريعة: "+names,()=>switchTab("quiz"));
         }
       }
     }
     if(settings.quiz){
       const gap = settings.quizFreq==="high"?3600e3 : settings.quizFreq==="low"?6*3600e3 : 3*3600e3;
       if(Date.now()-(settings.lastSurprise||0)>gap){
-        if(buildPools().length>=4){ settings.lastSurprise=Date.now(); saveSet(); surprisePending=true;
+        if(buildPools().length>=1){ settings.lastSurprise=Date.now(); saveSet(); surprisePending=true;
           notify("اختبار مفاجئ! ⚡","جاهز اختبار سريع لكلماتك.","surprise");
           showBanner("⚡ اختبار مفاجئ بانتظارك — اضغط للبدء",()=>{ surprisePending=false; switchTab("quiz"); startQuiz(); });
         }
@@ -1320,7 +1319,7 @@
   function onOpenCheck(){
     if(!settings.notif) return;
     const c=counts();
-    if(c.due>0) showBanner("📚 عندك "+c.due+" كلمة للمراجعة — اضغط للبدء",()=>switchTab("review"));
+    if(c.due>0) showBanner("📚 عندك "+c.due+" عنصر للمراجعة — افتح الاختبار",()=>switchTab("quiz"));
   }
   async function enableBgSync(){
     try{ if(!("serviceWorker" in navigator)) return "unsupported";
