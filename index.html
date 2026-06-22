@@ -15,7 +15,6 @@
 <meta name="apple-mobile-web-app-title" content="تعلّم الإنجليزية">
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 </head>
 <body>
 <div id="app" dir="rtl">
@@ -231,7 +230,7 @@
   let progress={}, userWords=[], sentences={}, hidden={}, usingStore="memory", userSentences=[];
   let settings={notif:false,review:true,quiz:true,learn:true,suggest:true,time:"20:00",quizFreq:"med",bgsync:false,level:"",levelPct:0,levelDate:"",lastDaily:"",lastSurprise:0,winStart:"09:00",winEnd:"21:00",interval:60,lastInterval:0,batchSize:4};
   let history={}, surprisePending=false;
-  let queue=[], qIndex=0, revealed=false, sessionDone=0, activeTab="study", orderTick=0;
+  let queue=[], qIndex=0, revealed=false, sessionDone=0, activeTab="study", orderTick=0, revMCQ=null, revAnswered=false, reviewPools=null;
   function nextOrder(){ return Date.now()*1000 + (orderTick++ % 1000); }
   let quizItems=[], quizIdx=0, quizScore=0, allForms=[], editingId=null, quizWrong=[];
 
@@ -381,20 +380,22 @@
     try{ await deferredPrompt.userChoice; }catch(e){}
     deferredPrompt=null; refreshInstallBar(); refreshSettingsInstall();
   }
-  /* ===== Cloud sync via Firebase (private, sync-code based) ===== */
+  /* ===== Cloud sync via Firebase REST + polling (stable on flaky networks) ===== */
   const FB_CONFIG={ apiKey:"AIzaSyDrZn6F67g-3-50ttqZ2G-NoWZ6BhJQHR0", authDomain:"eng-vocab-952ec.firebaseapp.com", projectId:"eng-vocab-952ec", storageBucket:"eng-vocab-952ec.firebasestorage.app", messagingSenderId:"100693020053", appId:"1:100693020053:web:9dd615f66dd3b497e17a9c" };
+  const FS_BASE="https://firestore.googleapis.com/v1/projects/eng-vocab-952ec/databases/(default)/documents/vocab/";
   const K_SYNC="vocab3:synccode";
-  let fbDb=null, fbAuthed=false, syncCode="", syncUnsub=null, lastCloudT=0, applyingRemote=false, pushTimer=null, retryTimer=null, pendingShell=false, syncStatus="off";
+  let fbAuthed=false, syncCode="", lastCloudT=0, applyingRemote=false, pushTimer=null, pollTimer=null, pendingShell=false, syncStatus="off", fbInited=false;
   function syncRender(){ if(document.getElementById("sheet-back")||document.getElementById("modal-back")){ pendingShell=true; refreshSyncUI(); } else { shell(); } }
   function fbInit(){
-    if(fbDb||!window.firebase||!firebase.initializeApp) return;
+    if(fbInited||!window.firebase||!firebase.initializeApp) return;
+    fbInited=true;
     try{
       firebase.initializeApp(FB_CONFIG);
-      fbDb=firebase.firestore();
-      firebase.auth().onAuthStateChanged(u=>{ fbAuthed=!!u; if(fbAuthed&&syncCode) startCloud(); refreshSyncUI(); });
-      firebase.auth().signInAnonymously().catch(()=>{ syncStatus="error"; refreshSyncUI(); clearTimeout(retryTimer); retryTimer=setTimeout(()=>{ if(syncCode) firebase.auth().signInAnonymously().catch(()=>{}); }, 5000); });
+      firebase.auth().onAuthStateChanged(u=>{ fbAuthed=!!u; if(fbAuthed&&syncCode) startSync(); refreshSyncUI(); });
+      firebase.auth().signInAnonymously().catch(()=>{ syncStatus="error"; refreshSyncUI(); });
     }catch(e){ syncStatus="error"; refreshSyncUI(); }
   }
+  async function fsToken(){ try{ const u=firebase.auth&&firebase.auth().currentUser; return u? await u.getIdToken() : null; }catch(e){ return null; } }
   function stateBlob(){ return { v:VERSION, t:Date.now(), progress:progress, userWords:userWords, userSentences:userSentences, sentences:sentences, hidden:hidden, settings:settings, history:history }; }
   async function applyBlob(d){
     if(!d) return; applyingRemote=true;
@@ -427,33 +428,48 @@
     const mergedCount=userWords.length+userSentences.length;
     if(mergedCount>remoteCount) pushCloud();
   }
-  function startCloud(){
-    if(!fbDb||!syncCode) return;
-    if(syncUnsub){ syncUnsub(); syncUnsub=null; }
-    syncStatus="connecting"; refreshSyncUI();
-    const ref=fbDb.collection("vocab").doc(syncCode);
-    syncUnsub=ref.onSnapshot(snap=>{
+  async function pullCloud(){
+    if(!syncCode) return;
+    const tok=await fsToken(); if(!tok){ syncStatus="error"; refreshSyncUI(); return; }
+    try{
+      const r=await fetch(FS_BASE+encodeURIComponent(syncCode), { headers:{ "Authorization":"Bearer "+tok } });
+      if(r.status===404){ syncStatus="on"; refreshSyncUI(); await pushCloud(); return; }
+      if(!r.ok){ syncStatus="error"; refreshSyncUI(); return; }
       syncStatus="on";
-      const d=(snap&&snap.exists)?snap.data():null;
-      if(!d){ pushCloud(); refreshSyncUI(); return; }
-      if((d.t||0)>lastCloudT){ lastCloudT=d.t||0; applyBlob(d); }
+      const j=await r.json();
+      const s=j&&j.fields&&j.fields.blob&&j.fields.blob.stringValue;
+      if(s){ let d=null; try{ d=JSON.parse(s); }catch(e){} if(d&&(d.t||0)>lastCloudT){ lastCloudT=d.t||0; applyBlob(d); } }
       refreshSyncUI();
-    }, ()=>{ syncStatus="error"; refreshSyncUI(); clearTimeout(retryTimer); retryTimer=setTimeout(()=>{ if(syncCode&&fbAuthed) startCloud(); }, 5000); });
+    }catch(e){ syncStatus="error"; refreshSyncUI(); }
   }
   async function pushCloud(){
-    if(!fbDb||!syncCode||applyingRemote) return;
+    if(!syncCode||applyingRemote) return;
+    const tok=await fsToken(); if(!tok){ syncStatus="error"; refreshSyncUI(); return; }
     const b=stateBlob(); lastCloudT=b.t;
-    try{ await fbDb.collection("vocab").doc(syncCode).set(b); syncStatus="on"; }catch(e){ syncStatus="error"; }
+    const body={ fields:{ blob:{stringValue:JSON.stringify(b)}, t:{integerValue:String(b.t)} } };
+    try{
+      const r=await fetch(FS_BASE+encodeURIComponent(syncCode)+"?updateMask.fieldPaths=blob&updateMask.fieldPaths=t",
+        { method:"PATCH", headers:{ "Authorization":"Bearer "+tok, "Content-Type":"application/json" }, body:JSON.stringify(body) });
+      syncStatus=r.ok?"on":"error";
+    }catch(e){ syncStatus="error"; }
     refreshSyncUI();
   }
   function cloudPush(){ if(!syncCode||!fbAuthed||applyingRemote) return; clearTimeout(pushTimer); pushTimer=setTimeout(pushCloud, 900); }
+  function startSync(){
+    if(!syncCode) return;
+    if(syncStatus!=="on") syncStatus="connecting";
+    refreshSyncUI();
+    clearInterval(pollTimer);
+    pullCloud();
+    pollTimer=setInterval(pullCloud, 12000);
+  }
   function setSyncCode(code){
     code=(code||"").trim().replace(/["'\s]/g,"").toLowerCase();
     syncCode=code;
     try{ if(code) localStorage.setItem(K_SYNC,code); else localStorage.removeItem(K_SYNC); }catch(e){}
     lastCloudT=0;
-    if(code){ fbInit(); if(fbAuthed) startCloud(); }
-    else { if(syncUnsub){ syncUnsub(); syncUnsub=null; } syncStatus="off"; }
+    if(code){ fbInit(); if(fbAuthed) startSync(); }
+    else { clearInterval(pollTimer); syncStatus="off"; }
     refreshSyncUI();
   }
   function refreshSyncUI(){
@@ -467,8 +483,8 @@
       ${syncCode?'<div class="row-btns"><button class="pill-btn alt" id="sync-up">⬆ ارفع للسحابة</button><button class="pill-btn alt" id="sync-down">⬇ اسحب من السحابة</button></div>':''}`;
     const lk=document.getElementById("sync-link"); if(lk) lk.onclick=()=>setSyncCode(document.getElementById("sync-code-in").value);
     const off=document.getElementById("sync-off"); if(off) off.onclick=()=>setSyncCode("");
-    const up=document.getElementById("sync-up"); if(up) up.onclick=()=>{ lastCloudT=Date.now(); pushCloud(); };
-    const dn=document.getElementById("sync-down"); if(dn) dn.onclick=()=>{ if(fbDb&&syncCode) fbDb.collection("vocab").doc(syncCode).get().then(s=>{ if(s&&s.exists){ const d=s.data(); lastCloudT=(d.t||Date.now()); applyBlob(d); } }); };
+    const up=document.getElementById("sync-up"); if(up) up.onclick=()=>pushCloud();
+    const dn=document.getElementById("sync-down"); if(dn) dn.onclick=()=>{ lastCloudT=0; pullCloud(); };
   }
 
   function refreshSettingsInstall(){
@@ -495,11 +511,9 @@
 
   function derivTipHTML(w){
     const list=w.deriv||[];
-    let note="";
-    if(w.derivSrc==="net") note='<div class="dmeta" style="margin-bottom:6px">عائلة الكلمة من الإنترنت.</div>';
-    else if(w.src==="auto") note='<div class="dmeta" style="margin-bottom:6px">صيغ تلقائية قاعدية — اضغط «مشتقات من الإنترنت ⟳» أو «تعديل ✎».</div>';
-    if(!list.length) return note||(w.src?"لا توجد مشتقات — أضِفها بزر «تعديل ✎».":"لا توجد مشتقات.");
-    return note+list.map(d=>`<div class="drow"><span class="dform">${esc(d[0])}</span><span class="dpos">${esc(d[1])}</span><div class="dmeta">${esc(d[3])} · ${esc(d[2])}</div>${d[4]?`<div class="dex">${esc(d[4])}</div>`:""}${d[5]?`<div class="dextr">${esc(d[5])}</div>`:""}</div>`).join("");
+    if(!list.length) return w.src?"لا توجد مشتقات — أضِفها بزر «تعديل ✎».":"لا توجد مشتقات.";
+    const note='<div class="dmeta" style="margin-bottom:6px">'+(w.derivSrc==="net"?"عائلة الكلمة الشائعة":"صيغ قاعدية")+' · اضغط أي صيغة لإضافتها أو سماعها:</div>';
+    return note+list.map(d=>`<div class="drow"><span class="wtok dform" data-w="${esc(d[0])}">${esc(d[0])}</span><span class="dpos">${esc(d[1])}</span><div class="dmeta">${esc(d[3])} · ${esc(d[2])}</div>${d[4]?`<div class="dex">${esc(d[4])}</div>`:""}${d[5]?`<div class="dextr">${esc(d[5])}</div>`:""}</div>`).join("");
   }
   function classifySent(s){
     const t=String(s||"").toLowerCase().trim();
@@ -606,7 +620,7 @@
     document.querySelectorAll("[data-saveedit]").forEach(b=>b.onclick=()=>saveEdit(b.dataset.saveedit));
     document.querySelectorAll("[data-canceledit]").forEach(b=>b.onclick=()=>{ editingId=null; rerenderActive(); });
     document.querySelectorAll("[data-fderiv]").forEach(b=>b.onclick=()=>{ b.textContent="جارٍ الجلب…"; b.disabled=true; doFetchDeriv(b.dataset.fderiv); });
-    document.querySelectorAll("[data-fsent]").forEach(b=>b.onclick=()=>{ b.textContent="جارٍ جلب الجمل…"; b.disabled=true; doFetchSents(b.dataset.fsent); });
+    document.querySelectorAll("[data-fsent]").forEach(b=>b.onclick=()=>toggleFetchSents(b.dataset.fsent));
   }
   async function saveEdit(id){
     const e=userWords.find(x=>x.id===id); if(!e){ editingId=null; rerenderActive(); return; }
@@ -859,15 +873,17 @@
   }
   async function fetchDerivatives(word){
     const w=word.toLowerCase(); const stem=stemOf(w); let words=[];
-    const j=await getJSON("https://api.datamuse.com/words?md=p&max=25&sp="+encodeURIComponent(stem)+"*");
+    const j=await getJSON("https://api.datamuse.com/words?md=pf&max=30&sp="+encodeURIComponent(stem)+"*");
     if(!j) return null;
     words=j.filter(x=>x.word&&x.word.indexOf(stem)===0&&/^[a-z]+$/.test(x.word)&&Math.abs(x.word.length-w.length)<=9);
     if(!words.length) return null;
-    if(!words.some(x=>x.word===w)) words.unshift({word:w,tags:[]});
-    else { words.sort((a,b)=> a.word===w?-1:b.word===w?1:0); }
+    words.forEach(x=>{ x._f=0; (x.tags||[]).forEach(t=>{ if(t.indexOf("f:")===0) x._f=parseFloat(t.slice(2))||0; }); });
+    const base=words.find(x=>x.word===w)||{word:w,tags:[],_f:1e9};
+    const rest=words.filter(x=>x.word!==w).sort((a,b)=>(b._f||0)-(a._f||0));
+    words=[base].concat(rest);
     const posMap={n:"اسم",v:"فعل",adj:"صفة",adv:"ظرف"};
     const out=[];
-    for(const x of words.slice(0,6)){
+    for(const x of words.slice(0,5)){
       const form=x.word; let pos=""; (x.tags||[]).forEach(t=>{ if(posMap[t]&&!pos) pos=posMap[t]; });
       let tr=""; const tj=await getJSON("https://api.mymemory.translated.net/get?q="+encodeURIComponent(form)+"&langpair=en|ar");
       if(tj&&tj.responseData&&tj.responseData.translatedText) tr=tj.responseData.translatedText;
@@ -939,6 +955,28 @@
     }
     return out.length?out:null;
   }
+  let sentFetching={};
+  function toggleFetchSents(id){
+    if(sentFetching[id]){ sentFetching[id]=false; const b=document.querySelector("[data-fsent='"+id+"']"); if(b){ b.textContent="جمل من الإنترنت ⟳"; b.style.background=""; b.style.color=""; } return; }
+    sentFetching[id]=true; fetchSentsLoop(id);
+  }
+  async function fetchSentsLoop(id){
+    const w=wmap()[id]||{}; let attempt=0;
+    while(sentFetching[id]){
+      attempt++;
+      let b=document.querySelector("[data-fsent='"+id+"']"); if(b){ b.textContent="⏳ يبحث… (محاولة "+attempt+") — اضغط للإيقاف"; b.style.background="var(--accent-soft)"; b.style.color="#8a651e"; }
+      let list=null; try{ list=await fetchSentences(w.en||id); }catch(e){}
+      if(!sentFetching[id]) return;
+      if(list&&list.length){
+        sentFetching[id]=false; sentences[id]=list; await saveSent();
+        b=document.querySelector("[data-fsent='"+id+"']"); if(b){ b.textContent="✓ تمت ("+list.length+" جملة)"; b.style.background="var(--green-soft)"; b.style.color="var(--green)"; }
+        setTimeout(()=>rerenderActive(),900); return;
+      }
+      b=document.querySelector("[data-fsent='"+id+"']"); if(b){ b.textContent="تعذّر — يعيد المحاولة… اضغط للإيقاف"; }
+      await new Promise(r=>setTimeout(r,4000));
+      if(!sentFetching[id]) return;
+    }
+  }
   async function doFetchSents(id){
     const w=wmap()[id]||{};
     const list=await fetchSentences(w.en||id);
@@ -1009,7 +1047,7 @@
 
   /* ===== REVIEW tab (scheduled) ===== */
   function dueWords(){ const t=today(); return allItems().filter(w=>{ const s=st(w.id); return (s.status==="review"||s.status==="done")&&s.nextDue&&s.nextDue<=t; }); }
-  function startReview(){ queue=dueWords(); queue.sort(()=>Math.random()-0.5); qIndex=0; revealed=false; sessionDone=0; renderReview(); }
+  function startReview(){ queue=dueWords(); queue.sort(()=>Math.random()-0.5); qIndex=0; revMCQ=null; revAnswered=false; reviewPools=quizPools(); sessionDone=0; renderReview(); }
 
   /* pick a small batch of previously-learned words, oldest first (spaced reinforcement) */
   function pickReviewBatch(n){
@@ -1026,7 +1064,7 @@
     activeTab="review";
     document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.t==="review"));
     ["study","learned","review","quiz","done"].forEach(v=>$("#view-"+v).classList.toggle("hidden",v!=="review"));
-    queue=q; qIndex=0; revealed=false; sessionDone=0; renderReview();
+    queue=q; qIndex=0; revMCQ=null; revAnswered=false; reviewPools=quizPools(); sessionDone=0; renderReview();
   }
 
   function scheduleHTML(){
@@ -1040,32 +1078,43 @@
   function renderReview(){
     const view=$("#view-review");
     if(qIndex>=queue.length){
-      const c=counts();
       view.innerHTML=`<div class="empty"><div class="big">${sessionDone?"✅":"📅"}</div>
-        <h3>${sessionDone?"خلّصت مراجعة اليوم":"ما فيه كلمات مستحقّة اليوم"}</h3>
-        <p>${sessionDone?("راجعت "+sessionDone+" كلمة."):"المراجعة تشتغل تلقائياً حسب الجدول الزمني. علّم كلمات بـ«تعلّمتها» عشان تدخل هنا."}</p></div>${scheduleHTML()}`;
+        <h3>${sessionDone?"خلّصت مراجعة اليوم":"ما فيه عناصر مستحقّة اليوم"}</h3>
+        <p>${sessionDone?("راجعت "+sessionDone+" عنصراً."):"المراجعة تشتغل تلقائياً حسب الجدول الزمني. علّم كلمات أو جمل بـ«تعلّمتها» عشان تدخل هنا."}</p></div>${scheduleHTML()}`;
       refreshStatsOnly(); return;
     }
     const w=queue[qIndex]; const pct=Math.round((qIndex/queue.length)*100);
-    const isSent=w.type==="sent"; const typeBadge=`<span class="badge ${isSent?"b-cat":"b-study"}" style="margin-inline-start:8px">${isSent?"جملة":"كلمة"}</span>`;
+    if(!revMCQ){ revMCQ=mcqFor(w, reviewPools||quizPools()); revAnswered=false; }
+    const item=revMCQ;
+    if(!item){ // لا يمكن تكوين سؤال (نقص بيانات) → خذها كصحيحة وتابع
+      grade(true); return;
+    }
+    const isSent=w.type==="sent";
+    const promptHTML = item.promptDir==="ltr"
+      ? `<div class="q-en" style="font-size:${isSent?16:18}px;direction:ltr">${esc(item.prompt)}</div>`
+      : `<div class="q-ar">${esc(item.prompt)}</div>`;
     view.innerHTML=`
       <div class="progress-line"><div class="progress-fill" style="width:${pct}%"></div></div>
       <div class="counter">${qIndex+1} من ${queue.length} ${st(w.id).status==="done"?"· (مراجعة دورية)":""}</div>
-      <div class="flash"><div class="q-en" style="${isSent?"font-size:18px;direction:ltr":""}">${esc(w.en)} <button class="spk" data-spk="${esc(w.en)}" title="استمع">🔊</button>${typeBadge}</div><div class="q-hint">${revealed?"":"فكّر بالمعنى ثم اكشف"}</div><div id="rev"></div></div>
-      <div id="actions"></div>`;
-    if(!revealed){ $("#actions").innerHTML=`<button class="btn btn-show" id="show">اكشف الإجابة</button>`; $("#show").onclick=()=>{revealed=true;renderReview();}; }
-    else{
-      $("#rev").innerHTML=`<div class="reveal"><div class="r-pron">${esc(w.pron)}</div><div class="r-ar">${esc(w.ar)}</div><div class="r-uses">${esc(w.uses)}</div></div>`;
-      $("#actions").innerHTML=`<div class="grade"><button class="btn btn-no" id="no">أراجعها 🔁</button><button class="btn btn-yes" id="yes">أعرفها ✓</button></div>`;
-      $("#yes").onclick=()=>grade(true); $("#no").onclick=()=>grade(false);
-    }
+      <span class="q-kind ${item.kind==="sent"?"k-sent":"k-word"}">${item.label}</span>
+      <div class="q-prompt">${item.q} <button class="spk" data-spk="${esc(w.en)}" title="استمع">🔊</button></div>
+      ${promptHTML}<div id="opts"></div>`;
+    const b=$("#opts");
+    item.options.forEach(o=>{ const btn=document.createElement("button"); btn.className="opt"; if(item.optDir==="ltr") btn.style.direction="ltr"; btn.textContent=o; btn.onclick=()=>ansReview(btn,o===item.answer,item.answer); b.appendChild(btn); });
+    document.querySelectorAll("#view-review [data-spk]").forEach(x=>x.onclick=()=>speak(x.dataset.spk));
+  }
+  function ansReview(btn,correct,answer){
+    if(revAnswered) return; revAnswered=true;
+    document.querySelectorAll("#view-review .opt").forEach(b=>{ b.disabled=true; if(b.textContent===answer) b.classList.add("correct"); });
+    if(!correct) btn.classList.add("wrong");
+    setTimeout(()=>grade(correct), 1000);
   }
   async function grade(known){
     const w=queue[qIndex]; const s=st(w.id);
     s.seen++;
     if(s.status==="done"){ if(known){ s.correct++; s.nextDue=addDays(DONE_INTERVAL); } else { s.status="review"; s.box=2; s.nextDue=addDays(2); } }
     else { if(known){ s.box=Math.min(5,s.box+1); s.correct++; s.nextDue=addDays(INTERVALS[s.box]); } else { s.box=1; s.nextDue=addDays(1); } }
-    s.last=today(); logActivity("r",1); await saveProg(); sessionDone++; qIndex++; revealed=false; renderReview();
+    s.last=today(); logActivity("r",1); await saveProg(); sessionDone++; qIndex++; revMCQ=null; revAnswered=false; renderReview();
   }
 
   /* ===== DONE tab ===== */
@@ -1101,32 +1150,43 @@
     const word=parts[pick].replace(/[^A-Za-z]/g,""); const copy=parts.slice(); copy[pick]="＿＿＿";
     return {word:word, blanked:copy.join("")};
   }
-  function buildPools(){
-    const pool=[]; const formsSet=new Set(); const sentEns=[], sentArs=[];
-    const rnd=(arr,n,not)=>{ const u=[...new Set(arr)].filter(x=>x&&x!==not); return u.sort(()=>Math.random()-0.5).slice(0,n); };
-    const mk=(answer,distract,extra)=>Object.assign({answer:answer,options:[answer,...distract].sort(()=>Math.random()-0.5)},extra);
+  const qrnd=(arr,n,not)=>{ const u=[...new Set(arr)].filter(x=>x&&x!==not); return u.sort(()=>Math.random()-0.5).slice(0,n); };
+  const qmk=(answer,distract,extra)=>Object.assign({answer:answer,options:[answer,...distract].sort(()=>Math.random()-0.5)},extra);
+  function quizPools(){
+    const forms=new Set(), sentEns=[], sentArs=[], arWords=[];
     allWords().forEach(w=>{ const s=st(w.id); if(s.status!=="review"&&s.status!=="done") return;
-      formsSet.add(w.en); (w.deriv||[]).forEach(d=>formsSet.add(d[0]));
+      forms.add(w.en); (w.deriv||[]).forEach(d=>forms.add(d[0]));
+      const ar=(w.ar||"").split("؛")[0].split("،")[0].trim(); if(ar) arWords.push(ar);
     });
-    allForms=Array.from(formsSet);
     allSentences().forEach(s=>{ const ss=st(s.id); if(ss.status!=="review"&&ss.status!=="done") return; if(s.en) sentEns.push(s.en); if(s.ar) sentArs.push(s.ar); });
-    allWords().forEach(w=>{ const s=st(w.id); if(s.status!=="review"&&s.status!=="done") return;
-      const ar=(w.ar||"").split("؛")[0].split("،")[0].trim();
-      if(ar) pool.push(mk(w.en, rnd(allForms,3,w.en), {kind:"word",label:"كلمة أساسية",q:"اختر الكلمة الإنجليزية الصحيحة:",prompt:ar,promptDir:"rtl",optDir:"ltr",wid:w.id}));
-      (w.deriv||[]).forEach(d=>{ if(d[2]) pool.push(mk(d[0], rnd(allForms,3,d[0]), {kind:"deriv",label:"مشتق",q:"اختر الصيغة الإنجليزية الصحيحة:",prompt:d[2],promptDir:"rtl",optDir:"ltr",wid:w.id})); });
-    });
-    allSentences().forEach(s=>{ const ss=st(s.id); if(ss.status!=="review"&&ss.status!=="done") return;
+    return {forms:Array.from(forms), sentEns, sentArs, arWords};
+  }
+  // Build one multiple-choice question for a word or sentence (varied formats)
+  function mcqFor(w, P){
+    if(w.type==="sent"){
       const fmts=[];
-      if(s.ar && sentEns.length>=4) fmts.push("A");
-      if(s.ar && sentArs.length>=4) fmts.push("C");
-      const bl=makeBlank(s.en); if(bl && allForms.length>=4) fmts.push("B");
-      if(!fmts.length && s.ar && sentEns.length>=2) fmts.push("A");
-      if(!fmts.length) return;
+      if(w.ar && P.sentEns.length>=2) fmts.push("A");
+      if(w.ar && P.sentArs.length>=2) fmts.push("C");
+      const bl=makeBlank(w.en); if(bl && P.forms.length>=3) fmts.push("B");
+      if(!fmts.length){ if(w.ar && P.sentEns.length>=1) fmts.push("A"); else if(bl) fmts.push("B"); }
+      if(!fmts.length) return null;
       const fmt=fmts[Math.floor(Math.random()*fmts.length)];
-      if(fmt==="A") pool.push(mk(s.en, rnd(sentEns,3,s.en), {kind:"sent",label:"جملة — اختر الجملة",q:"اختر الجملة الإنجليزية الصحيحة لهذه الترجمة:",prompt:s.ar,promptDir:"rtl",optDir:"ltr",wid:s.id}));
-      else if(fmt==="C") pool.push(mk(s.ar, rnd(sentArs,3,s.ar), {kind:"sent",label:"جملة — اختر الترجمة",q:"اختر الترجمة الصحيحة لهذه الجملة:",prompt:s.en,promptDir:"ltr",optDir:"rtl",wid:s.id}));
-      else pool.push(mk(bl.word, rnd(allForms,3,bl.word), {kind:"sent",label:"جملة — الكلمة الناقصة",q:"اختر الكلمة الناقصة في الجملة:",prompt:bl.blanked,promptDir:"ltr",optDir:"ltr",wid:s.id}));
-    });
+      if(fmt==="A") return qmk(w.en, qrnd(P.sentEns,3,w.en), {kind:"sent",label:"جملة — اختر الجملة",q:"اختر الجملة الإنجليزية الصحيحة لهذه الترجمة:",prompt:w.ar,promptDir:"rtl",optDir:"ltr",wid:w.id});
+      if(fmt==="C") return qmk(w.ar, qrnd(P.sentArs,3,w.ar), {kind:"sent",label:"جملة — اختر الترجمة",q:"اختر الترجمة الصحيحة لهذه الجملة:",prompt:w.en,promptDir:"ltr",optDir:"rtl",wid:w.id});
+      return qmk(bl.word, qrnd(P.forms,3,bl.word), {kind:"sent",label:"جملة — الكلمة الناقصة",q:"اختر الكلمة الناقصة في الجملة:",prompt:bl.blanked,promptDir:"ltr",optDir:"ltr",wid:w.id});
+    }
+    const ar=(w.ar||"").split("؛")[0].split("،")[0].trim();
+    // vary direction: Arabic→pick English, or English→pick Arabic
+    if(ar && Math.random()<0.5 && P.arWords.filter(x=>x!==ar).length>=2){
+      return qmk(ar, qrnd(P.arWords,3,ar), {kind:"word",label:"كلمة — اختر الترجمة",q:"اختر الترجمة العربية الصحيحة:",prompt:w.en,promptDir:"ltr",optDir:"rtl",wid:w.id});
+    }
+    if(!ar) return null;
+    return qmk(w.en, qrnd(P.forms,3,w.en), {kind:"word",label:"كلمة — اختر الإنجليزية",q:"اختر الكلمة الإنجليزية الصحيحة:",prompt:ar,promptDir:"rtl",optDir:"ltr",wid:w.id});
+  }
+  function buildPools(){
+    const P=quizPools(); const pool=[];
+    allWords().forEach(w=>{ const s=st(w.id); if(s.status!=="review"&&s.status!=="done") return; const q=mcqFor(w,P); if(q) pool.push(q); });
+    allSentences().forEach(s=>{ const ss=st(s.id); if(ss.status!=="review"&&ss.status!=="done") return; const q=mcqFor(s,P); if(q) pool.push(q); });
     return pool;
   }
   function startQuiz(){
